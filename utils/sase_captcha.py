@@ -70,7 +70,7 @@ class CaptchaModal(discord.ui.Modal, title="Enter CAPTCHA Code"):
                 await interaction.response.send_message("I lack perms to assign that role sorry lol.", ephemeral=True)
                 return
 
-            await interaction.response.send_message("*✅ verified**\n> congrats you verified! at least we know you aint a bot now", ephemeral=True)
+            await interaction.response.send_message("**✅ verified**\n> congrats you verified! at least we know you aint a bot now", ephemeral=True)
         else:
             await interaction.response.send_message("**❌ invalid**\n> so you a bot. if ur actually real try again", ephemeral=True)
 
