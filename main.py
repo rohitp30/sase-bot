@@ -74,7 +74,7 @@ class SASEBot(commands.Bot):
 
     def __init__(self, uptime: time.time):
         super().__init__(
-            command_prefix=commands.when_mentioned_or(os.getenv("PREFIX")),
+            command_prefix=commands.when_mentioned_or(">"),
             intents=discord.Intents.all(),
             case_insensitive=True,
             tree_cls=SASEBotSlashTree,
@@ -132,6 +132,12 @@ class SASEBot(commands.Bot):
             return True
 
         return await super().is_owner(user)
+
+    async def on_message(self, message: discord.Message):
+        if message.author.bot:
+            return
+
+        await self.process_commands(message)
 
     @property
     def version(self):
