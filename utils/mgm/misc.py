@@ -291,6 +291,5 @@ class MiscCMD(commands.Cog):
             await ctx.send("connected")
 
 
-
 async def setup(bot: commands.Bot):
     await bot.add_cog(MiscCMD(bot))

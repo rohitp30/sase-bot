@@ -14,6 +14,8 @@ from typing import (
 )
 
 import discord
+import qrcode
+from PIL import Image
 from discord import ButtonStyle, SelectOption, ui
 from dotenv import load_dotenv
 from github import Github
@@ -440,3 +442,38 @@ class TicTacToe(discord.ui.View):
             return self.Tie
 
         return None
+
+
+def generate_qr_with_logo(data, output_path, logo_path):
+    qr = qrcode.QRCode(
+        version=None,  # auto size
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(data)
+    qr.make(fit=True)
+
+    qr_img = qr.make_image(
+        fill_color="black",
+        back_color="white"
+    ).convert("RGBA")
+
+    logo = Image.open(logo_path).convert("RGBA")
+
+    qr_w, qr_h = qr_img.size
+
+    # Bigger logo (≈35% is safe with ERROR_CORRECT_H)
+    logo_size = int(qr_w * 0.4)
+    logo = logo.resize((logo_size, logo_size), Image.LANCZOS)
+    #logo.putalpha(50)
+
+    pos = (
+        (qr_w - logo_size) // 2,
+        (qr_h - logo_size) // 2,
+    )
+
+    # Paste logo directly — NO background box
+    qr_img.paste(logo, pos, mask=logo)
+
+    qr_img.save(output_path)

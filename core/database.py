@@ -221,7 +221,93 @@ class CheckInformation(BaseModel):
     else_situation = BooleanField()
     persistent_change = BooleanField()
 
+class Reminder(BaseModel):
+    """
+    Reminder Table
+    Stores both one-off and recurring reminders in UTC.
 
+    Fields:
+        id                AutoField
+        user_id           BigInteger (Discord user ID)
+        channel_id        BigInteger (channel to send message; if send_dm=True, channel may be NULL)
+        guild_id          BigInteger (optional reference)
+        content           TextField
+        due_at            DateTime (UTC - next trigger time)
+        created_at        DateTime (UTC creation time)
+        last_sent_at      DateTime (UTC last time sent)
+        timezone          TextField (IANA tz string user supplied; default 'UTC')
+        is_recurring      Boolean
+        interval_seconds  Integer (recurrence interval in seconds if recurring)
+        occurrences_left  Integer (remaining repetitions; NULL means infinite)
+        send_dm           Boolean (send in DM when firing)
+        active            Boolean (soft-delete / cancel)
+    """
+    id = AutoField()
+    user_id = BigIntegerField(index=True)
+    content = TextField()
+    due_at = DateTimeField(index=True)
+    created_at = DateTimeField(default=datetime.utcnow)
+    last_sent_at = DateTimeField(null=True)
+    timezone = TextField(default="UTC")
+    is_recurring = BooleanField(default=False)
+    interval_seconds = IntegerField(null=True)
+    occurrences_left = IntegerField(null=True)
+    active = BooleanField(default=True)
+
+    class Meta:
+        table_name = "reminders"
+
+class RedirectLogs(BaseModel):
+    """
+    #RedirectLogs
+    `id`: AutoField()
+    Database Entry ID
+
+    `redirect_id`: BigIntegerField()
+    Redirect ID of the redirect. (Corresponds to the ID schema for Redirect.Pizza's API)
+
+    `from_url`: TextField()
+    The URL that was redirected from.
+
+    `to_url`: TextField()
+    The URL that was redirected to.
+
+    `subdomain`: TextField()
+    The subdomain the from_url uses.
+
+    `author_id`: BigIntegerField()
+    The author ID of the user that made the redirect.
+
+    `created_at`: DateTimeField()
+    The date when the redirect was made.
+    """
+
+    id = AutoField()
+    redirect_id = BigIntegerField(unique=False)
+    from_url = TextField(unique=False)
+    to_url = TextField(unique=False)
+    subdomain = TextField(default=None)
+    author_id = BigIntegerField(unique=False)
+    created_at = DateTimeField()
+
+
+class ApprovedSubDomains(BaseModel):
+    """
+    #ApprovedSubDomains
+
+    `id`: AutoField()
+    Database Entry
+
+    `sub_domain`: TextField()
+    Domain that is approved.
+
+    `author_id`: BigIntegerField()
+    Author ID of the user that requested the domain.
+    """
+
+    id = AutoField()
+    sub_domain = TextField()
+    author_id = BigIntegerField()
 app = Flask(__name__)
 
 
@@ -251,6 +337,9 @@ tables = {
     "BaseQueue": BaseQueue,
     "CommandAnalytics": CommandAnalytics,
     "CheckInformation": CheckInformation,
+    "Reminder": Reminder,
+    "RedirectLogs": RedirectLogs,
+    "ApprovedSubDomains": ApprovedSubDomains,
 }
 
 """
@@ -258,5 +347,5 @@ This function automatically adds tables to the database if they do not exist,
 however it does take a significant amount of time to run so the env variable 'ITER_TABLES' should be 'False'
 in development. 
 """
-if os.getenv("ITER_TABLES") == "True":
-    iter_table(tables)
+
+iter_table(tables)
