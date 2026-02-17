@@ -1,10 +1,15 @@
+import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from google.oauth2.service_account import Credentials
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+import os
+import pickle
 
 # QR generator lives elsewhere
 from core.common import generate_qr_with_logo
@@ -13,13 +18,10 @@ from core.common import generate_qr_with_logo
 # =========================
 # CONFIG
 # =========================
+DESTINATION_PARENT_FOLDER_ID = "1Z85uVNnFj7vLGAWVeD6oVZjjyQjpWQkv"
+TEMPLATE_FOLDER_ID = "1I5s1TV0XqTDkfDmutXVFa7q3sjQ4v--p"
 
-SERVICE_ACCOUNT_FILE = "credentials/sasebot_creds.json"
-
-DESTINATION_PARENT_FOLDER_ID = "1hLYMlSHU9f0_D_iguvONN2BIA9S7U5tt"
-TEMPLATE_FOLDER_ID = "1c76aa--Qe0ZjpLbpn2tmTIpakP4MhAxi"
-
-SASE_LOGO_PATH = "assets/sase_logo.png"
+SASE_LOGO_PATH = "assets/sase_logo_v3.png"
 
 SCOPES = [
     "https://www.googleapis.com/auth/drive",
@@ -32,13 +34,33 @@ SCOPES = [
 # GOOGLE CLIENT
 # =========================
 
+TOKEN_FILE = "credentials/token.pickle"
+CLIENT_SECRET_FILE = "credentials/oauth_client.json"
+
 def get_google_services():
-    creds = Credentials.from_service_account_file(
-        SERVICE_ACCOUNT_FILE, scopes=SCOPES
-    )
+    creds = None
+
+    if os.path.exists(TOKEN_FILE):
+        with open(TOKEN_FILE, "rb") as token:
+            creds = pickle.load(token)
+
+    if not creds or not creds.valid:
+        creds.refresh(Request())
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                CLIENT_SECRET_FILE, SCOPES
+            )
+            creds = flow.run_local_server(port=0)
+
+        with open(TOKEN_FILE, "wb") as token:
+            pickle.dump(creds, token)
+
     drive = build("drive", "v3", credentials=creds)
     forms = build("forms", "v1", credentials=creds)
     slides = build("slides", "v1", credentials=creds)
+
     return drive, forms, slides
 
 
@@ -51,8 +73,6 @@ class WorkshopCog(commands.Cog):
         self.bot = bot
         self.drive, self.forms, self.slides = get_google_services()
 
-    async def cog_load(self):
-        self.bot.add_view(WorkshopView(self.drive, self.forms, self.slides))
 
     EC = app_commands.Group(
         name="ec",
@@ -60,15 +80,19 @@ class WorkshopCog(commands.Cog):
         guild_ids=[1376018416934322176, 1223473430410690630],
     )
 
-    @commands.command()
-    async def create_exam_workshop(self, ctx):
-        await ctx.send(
-            "Create exam workshop assets:",
-            view=WorkshopView(self.drive, self.forms, self.slides),
+    @EC.command(description="Create exam workshop assets.")
+    async def create_exam_workshop(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            WorkshopModal(self.drive, self.forms, self.slides)
         )
 
     @EC.command(name="make_qr", description="Generate a QR code with the SASE logo.")
     async def make_qr(self, interaction: discord.Interaction, url: str, custom_background: discord.Attachment = None):
+        ec_member = interaction.guild.get_role(1376018416934322177)
+        if ec_member not in interaction.user.roles:
+            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            return
+
         await interaction.response.defer(thinking=True)
 
         temp_path = "/tmp/qr.png"
@@ -84,85 +108,6 @@ class WorkshopCog(commands.Cog):
         file = discord.File(temp_path, filename="qr.png")
         await interaction.followup.send("Here is your QR code:", file=file)
 
-    @EC.command(name="drive_whitelist", description="Whitelist a Google Drive folder for sharing.")
-    async def drive_whitelist(self, interaction: discord.Interaction, email: str):
-        if interaction.user.id not in [409152798609899530, 498538626565668887, 422187767330635786]:
-            await interaction.response.send_message(
-                "❌ You do not have permission to use this command.",
-                ephemeral=False
-            )
-            return
-
-        await interaction.response.defer(thinking=True)
-
-        DRIVE_ID = "0AHlVJBvAkoNsUk9PVA"
-
-        try:
-            # List existing permissions on the Shared Drive
-            perms_resp = self.drive.permissions().list(
-                fileId=DRIVE_ID,
-                supportsAllDrives=True,
-                fields="permissions(id, emailAddress, role)"
-            ).execute()
-
-            permissions = perms_resp.get("permissions", [])
-
-            # Check if email already has access
-            existing_perm = next(
-                (p for p in permissions if p.get("emailAddress") == email),
-                None
-            )
-
-            if existing_perm:
-                # Remove existing permission
-                self.drive.permissions().delete(
-                    fileId=DRIVE_ID,
-                    permissionId=existing_perm["id"],
-                    supportsAllDrives=True,
-                ).execute()
-
-                await interaction.followup.send(
-                    f"**Access removed**\n"
-                    f"> {email} has been removed from the SASE Shared Drive."
-                )
-                return
-
-            # Otherwise, grant access
-            self.drive.permissions().create(
-                fileId=DRIVE_ID,
-                body={
-                    "type": "user",
-                    "role": "writer",  # Content Manager role
-                    "emailAddress": email,
-                },
-                supportsAllDrives=True,
-            ).execute()
-
-            await interaction.followup.send(
-                f"**Access given**\n\n"
-                f"> {email} has been added as a **Contributor** to the SASE Shared Drive. Access it here **[📁 SASE Drive](https://drive.google.com/drive/u/3/folders/0AHlVJBvAkoNsUk9PVA)**"
-            )
-
-        except Exception as e:
-            await interaction.followup.send(
-                f"❌ **Failed to update access**\n\n"
-                f"Error: `{e}`"
-            )
-
-
-class WorkshopView(discord.ui.View):
-    def __init__(self, drive, forms, slides):
-        super().__init__(timeout=None)
-        self.drive = drive
-        self.forms = forms
-        self.slides = slides
-
-    @discord.ui.button(label="Create Exam Workshop", style=discord.ButtonStyle.green, custom_id="workshop:create_exam_workshop")
-    async def create(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(
-            WorkshopModal(self.drive, self.forms, self.slides)
-        )
-
 
 class WorkshopModal(discord.ui.Modal, title="New Exam Workshop"):
     class_name = discord.ui.TextInput(label="Class (e.g. Multi)")
@@ -177,13 +122,14 @@ class WorkshopModal(discord.ui.Modal, title="New Exam Workshop"):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(thinking=True)
-        await interaction.followup.send(f"{interaction.user.mention} hold on this might take a bit...\n\n-# meanwhile check if you have access to the SASE Drive Shared Drive: https://drive.google.com/drive/folders/0AHlVJBvAkoNsUk9PVA. if you don't ping rohit", ephemeral=True)
+        await interaction.followup.send(f"{interaction.user.mention} hold on this might take a bit...", ephemeral=True)
 
         class_name = self.class_name.value.strip()
         exam_number = self.exam_number.value.strip()
         date = self.date.value.strip()
 
-        result = create_exam_workshop_assets(
+        result = await asyncio.to_thread(
+            create_exam_workshop_assets,
             self.drive,
             self.forms,
             self.slides,
@@ -209,11 +155,6 @@ class WorkshopModal(discord.ui.Modal, title="New Exam Workshop"):
 - Upload any additional resources to the Drive folder as needed. (Blank exam & written solutions docs have already been created for you.)
 \n\n**🚨 To modify/create QR codes, you can use the `/ec make_qr` command in this server.**
             """,
-            inline=False,
-        )
-        embed.add_field(
-            name = "Don't have access?",
-            value = "If you do not have access to the created Drive folder or its contents ping rohit\n\n-# events directors can also whitelist themselves using `/ec drive_whitelist <email>`",
             inline=False,
         )
         embed.set_footer(text=f"Exam Workshop Created by {interaction.user}")
@@ -314,6 +255,16 @@ def copy_template_files(drive, template_folder_id, dest_folder_id, class_name, e
         elif mime == "application/vnd.google-apps.document":
             result["written_doc_id"] = copied["id"]
 
+            # Make the document shareable via link
+            drive.permissions().create(
+                fileId=copied["id"],
+                body={
+                    "type": "anyone",
+                    "role": "reader",
+                },
+                supportsAllDrives=True,
+            ).execute()
+
     return result
 
 
@@ -355,23 +306,11 @@ def update_slides(drive, slides_service, files, folder_id, class_name, exam_numb
 
     # Generate QR codes (paths only; implementation elsewhere)
     generate_qr_with_logo(
-        f"https://drive.google.com/drive/folders/{folder_id}",
-        "/tmp/drive_qr.png",
-        SASE_LOGO_PATH,
-    )
-    generate_qr_with_logo(
-        f"https://docs.google.com/forms/d/{files['form_id']}",
-        "/tmp/feedback_qr.png",
-        SASE_LOGO_PATH,
-    )
-    generate_qr_with_logo(
-        f"https://docs.google.com/document/d/{files['written_doc_id']}",
+        f"https://docs.google.com/document/d/{files['written_doc_id']}/edit?usp=sharing",
         "/tmp/written_qr.png",
         SASE_LOGO_PATH,
     )
 
-    drive_qr_url = upload_image(drive, "/tmp/drive_qr.png", "Drive QR", folder_id)
-    feedback_qr_url = upload_image(drive, "/tmp/feedback_qr.png", "Feedback QR", folder_id)
     written_qr_url = upload_image(drive, "/tmp/written_qr.png", "Written QR", folder_id)
 
     pres = slides_service.presentations().get(
@@ -384,30 +323,25 @@ def update_slides(drive, slides_service, files, folder_id, class_name, exam_numb
     # Slide 1 — exam title
     requests.append({
         "replaceAllText": {
-            "containsText": {"text": "[EXAM TITLE]", "matchCase": True},
-            "replaceText": f"{class_name} Exam {exam_number}",
-        }
-    })
-    requests.append({
-        "replaceAllText": {
-            "containsText": {"text": "[DATE]", "matchCase": True},
-            "replaceText": f"{date}",
+            "containsText": {"text": "[Subject]", "matchCase": False},
+            "replaceText": f"{class_name}",
         }
     })
 
     # Slide 3 — exam number
     requests.append({
         "replaceAllText": {
-            "containsText": {"text": "[#]", "matchCase": True},
+            "containsText": {"text": "[#]", "matchCase": False},
             "replaceText": exam_number,
         }
     })
 
-    # Slide 3 QR — Drive folder
-    requests.append(replace_qr(slides[2], drive_qr_url))
-
-    # Slide 4 QR — Feedback form
-    requests.append(replace_qr(slides[3], feedback_qr_url))
+    requests.append({
+        "replaceAllText": {
+            "containsText": {"text": "[Date]", "matchCase": False},
+            "replaceText": date,
+        }
+    })
 
     # Slide 5 QR — Written solutions
     requests.append(replace_qr(slides[4], written_qr_url))
